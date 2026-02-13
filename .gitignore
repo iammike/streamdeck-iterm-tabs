@@ -1,0 +1,5 @@
+node_modules/
+com.iammikec.iterm-tabs.sdPlugin/bin/
+com.iammikec.iterm-tabs.sdPlugin/logs/
+*.js.map
+.DS_Store

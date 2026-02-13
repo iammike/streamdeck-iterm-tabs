@@ -1,0 +1,43 @@
+{
+	"$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+	"Name": "iTerm Tabs",
+	"Version": "1.0.0.0",
+	"Author": "Mike Collins",
+	"Actions": [
+		{
+			"Name": "iTerm Tab",
+			"UUID": "com.iammikec.iterm-tabs.tab",
+			"Icon": "imgs/actions/tab/icon",
+			"Tooltip": "Shows an iTerm2 tab name and switches to it on press.",
+			"Controllers": ["Keypad"],
+			"States": [
+				{
+					"Image": "imgs/actions/tab/key",
+					"TitleAlignment": "middle",
+					"ShowTitle": true,
+					"FontSize": 12
+				}
+			]
+		}
+	],
+	"Category": "iTerm Tabs",
+	"CategoryIcon": "imgs/plugin/category-icon",
+	"CodePath": "bin/plugin.js",
+	"Description": "Displays iTerm2 tab names on Stream Deck buttons and switches tabs on press.",
+	"Icon": "imgs/plugin/marketplace",
+	"SDKVersion": 2,
+	"Software": {
+		"MinimumVersion": "6.5"
+	},
+	"OS": [
+		{
+			"Platform": "mac",
+			"MinimumVersion": "13"
+		}
+	],
+	"Nodejs": {
+		"Version": "20",
+		"Debug": "enabled"
+	},
+	"UUID": "com.iammikec.iterm-tabs"
+}
