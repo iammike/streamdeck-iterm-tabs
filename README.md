@@ -101,6 +101,33 @@ Currently there are no user-facing settings beyond dragging actions onto buttons
 - Badge visibility toggle
 - Tab index override in the Property Inspector
 
+### Environment overrides
+
+The notification detector uses macOS `log stream` and filters on these markers by default:
+
+- `com.googlecode.iterm2`
+- `heyagent`
+- `HeyAgent`
+
+You can override or extend this list via `ITERM_TABS_NOTIFICATION_MATCHERS`:
+
+```bash
+export ITERM_TABS_NOTIFICATION_MATCHERS="com.googlecode.iterm2,heyagent"
+```
+
+### HeyAgent + Codex (and Claude)
+
+If you use HeyAgent to wrap Codex or Claude Code, the default matchers already include `heyagent`, so notifications will trigger the same attention highlight as iTerm2’s built‑in notifications. This is most useful for Codex, which doesn’t emit BEL notifications by default.
+
+For Codex, HeyAgent is effectively required if you want reliable attention highlights. If you run `codex` directly, iTerm2 usually won’t post a macOS notification, so this plugin won’t get the signal to highlight the tab unless you add custom iTerm2 Triggers.
+
+Recommended setup for Codex:
+1. Install HeyAgent globally (`npm install -g heyagent`).
+2. Start Codex through HeyAgent (`hey codex` instead of `codex`).
+3. Keep HeyAgent notifications enabled (desktop method) so macOS posts the notification that the plugin detects.
+
+If you want HeyAgent notifications to be silent and invisible while still triggering attention highlights, set HeyAgent to use desktop notifications and then configure macOS Notifications for Terminal to `None`, disable sounds, and hide them from Notification Center. The unified log still records deliveries, so the plugin can detect them without visual or audible alerts.
+
 ## Known limitations
 
 - **macOS only** - relies on AppleScript, `lsappinfo`, and the macOS unified log.

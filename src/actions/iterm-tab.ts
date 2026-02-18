@@ -7,8 +7,8 @@ import streamDeck, {
 } from "@elgato/streamdeck";
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const exec = promisify(execFile);
@@ -55,7 +55,11 @@ const prevProcessingState = new Map<number, boolean>();
 // Notification monitoring via macOS unified log
 let logStreamProcess: ChildProcess | null = null;
 let notificationPending = false;
+let notificationProject: string | null = null;
 let notificationWindowEnd = -1;
+
+// HeyAgent notification event file for project correlation
+const NOTIFICATION_EVENT_FILE = join(homedir(), ".heyagent", "last-notification.json");
 
 // Polling state
 let pollInProgress = false;
@@ -70,6 +74,43 @@ let pollDurations: number[] = [];
 // iTerm2. When one fires, we correlate it with tab state to figure out
 // which tab likely triggered it.
 
+const DEFAULT_NOTIFICATION_MATCHERS = [
+	"com.googlecode.iterm2",
+	"heyagent",
+	"HeyAgent",
+];
+
+const NOTIFICATION_MATCHERS = (process.env.ITERM_TABS_NOTIFICATION_MATCHERS ||
+	DEFAULT_NOTIFICATION_MATCHERS.join(","))
+	.split(",")
+	.map((s) => s.trim())
+	.filter((s) => s.length > 0);
+
+function readNotificationEvent(): { project: string; timestamp: number } | null {
+	try {
+		const raw = readFileSync(NOTIFICATION_EVENT_FILE, "utf-8");
+		const data = JSON.parse(raw);
+		if (data.project && data.timestamp && Date.now() - data.timestamp < 5000) {
+			return data;
+		}
+	} catch {
+		// File missing or corrupted
+	}
+	return null;
+}
+
+function matchesProject(tabFullName: string, project: string): boolean {
+	return tabFullName.toLowerCase().includes(project.toLowerCase());
+}
+
+function buildLogPredicate(): string {
+	const clauses = NOTIFICATION_MATCHERS.map(
+		(m) => `eventMessage CONTAINS "${m.replace(/"/g, '\\"')}"`
+	);
+	const orClause = clauses.length > 0 ? `(${clauses.join(" OR ")})` : "true";
+	return `process == "usernoted" AND ${orClause}`;
+}
+
 function startLogStream(): void {
 	if (logStreamProcess) return;
 
@@ -77,7 +118,7 @@ function startLogStream(): void {
 		logStreamProcess = spawn("log", [
 			"stream",
 			"--predicate",
-			'process == "usernoted" AND eventMessage CONTAINS "com.googlecode.iterm2"',
+			buildLogPredicate(),
 			"--level",
 			"info",
 		]);
@@ -95,10 +136,17 @@ function startLogStream(): void {
 					line.trim() === ""
 				)
 					continue;
+				if (
+					NOTIFICATION_MATCHERS.length > 0 &&
+					!NOTIFICATION_MATCHERS.some((m) => line.includes(m))
+				)
+					continue;
 				if (!notificationPending) {
+					const event = readNotificationEvent();
+					notificationProject = event?.project ?? null;
 					notificationPending = true;
 					streamDeck.logger.info(
-						"iTerm2 notification detected - triggering immediate poll"
+						`Notification detected${notificationProject ? ` (project: ${notificationProject})` : ""} - triggering immediate poll`
 					);
 					// Don't wait for the next 3s cycle
 					pollTabs();
@@ -533,6 +581,32 @@ end tell`,
 //    "Claude needs your permission"), we detect it via `log stream` on
 //    the unified log and flag recently-active background tabs.
 
+// Apply the timing-based heuristic: open a notification window and flag
+// tabs that recently stopped processing.
+function applyTimingHeuristic(tabInfo: TabInfo, visibleTab: number): void {
+	notificationWindowEnd = pollCount + NOTIFICATION_WINDOW_POLLS;
+	streamDeck.logger.info(
+		`Notification window opened (polls ${pollCount}-${notificationWindowEnd})`
+	);
+
+	const { prompts, processing } = tabInfo;
+	for (let i = 0; i < tabInfo.names.length; i++) {
+		const tabIdx = i + 1;
+		if (tabIdx === visibleTab) continue;
+		const atPrompt = prompts[i] ?? false;
+		const isProc = processing[i] ?? false;
+		if (atPrompt || isProc) continue;
+
+		const lastActive = lastProcessingPoll.get(tabIdx);
+		if (lastActive !== undefined && pollCount - lastActive <= 3) {
+			attentionTabs.add(tabIdx);
+			streamDeck.logger.info(
+				`Tab ${tabIdx} flagged: notification + stopped ${pollCount - lastActive} polls ago`
+			);
+		}
+	}
+}
+
 function updateAttention(tabInfo: TabInfo): void {
 	const { activeIndex, prompts, processing, frontmost } = tabInfo;
 
@@ -541,30 +615,37 @@ function updateAttention(tabInfo: TabInfo): void {
 	// hidden from the user.
 	const visibleTab = frontmost ? activeIndex : -1;
 
-	// If a new notification arrived, open a detection window and
-	// immediately check for tabs that recently stopped processing
-	// (the transition may have already happened before this poll).
+	// If a new notification arrived, try project-based matching first,
+	// then fall back to the timing heuristic.
 	if (notificationPending) {
-		notificationWindowEnd = pollCount + NOTIFICATION_WINDOW_POLLS;
 		notificationPending = false;
-		streamDeck.logger.info(
-			`Notification window opened (polls ${pollCount}-${notificationWindowEnd}, frontmost=${frontmost})`
-		);
 
-		for (let i = 0; i < tabInfo.names.length; i++) {
-			const tabIdx = i + 1;
-			if (tabIdx === visibleTab) continue;
-			const atPrompt = prompts[i] ?? false;
-			const isProc = processing[i] ?? false;
-			if (atPrompt || isProc) continue;
-
-			const lastActive = lastProcessingPoll.get(tabIdx);
-			if (lastActive !== undefined && pollCount - lastActive <= 3) {
-				attentionTabs.add(tabIdx);
-				streamDeck.logger.info(
-					`Tab ${tabIdx} flagged: notification + stopped ${pollCount - lastActive} polls ago`
-				);
+		if (notificationProject) {
+			let matched = false;
+			for (let i = 0; i < tabInfo.names.length; i++) {
+				const tabIdx = i + 1;
+				if (tabIdx === visibleTab) continue;
+				if (matchesProject(tabInfo.names[i], notificationProject)) {
+					attentionTabs.add(tabIdx);
+					matched = true;
+					streamDeck.logger.info(
+						`Tab ${tabIdx} flagged: project match "${notificationProject}"`
+					);
+				}
 			}
+			if (matched) {
+				streamDeck.logger.info(
+					`Project match found for "${notificationProject}" - skipping timing heuristic`
+				);
+			} else {
+				streamDeck.logger.info(
+					`No tab matched project "${notificationProject}" - falling back to timing heuristic`
+				);
+				applyTimingHeuristic(tabInfo, visibleTab);
+			}
+			notificationProject = null;
+		} else {
+			applyTimingHeuristic(tabInfo, visibleTab);
 		}
 	}
 
