@@ -105,13 +105,6 @@ function matchesProject(tabFullName: string, project: string): boolean {
 }
 
 function buildLogPredicate(): string {
-	if (NOTIFICATION_MATCHERS.length === 0) {
-		streamDeck.logger.warn(
-			"No notification matchers configured - notification monitoring disabled"
-		);
-		// Return a predicate that never matches
-		return `process == "usernoted" AND eventMessage CONTAINS "___ITERM_TABS_DISABLED___"`;
-	}
 	const clauses = NOTIFICATION_MATCHERS.map(
 		(m) => `eventMessage CONTAINS "${m.replace(/"/g, '\\"')}"`
 	);
@@ -120,6 +113,7 @@ function buildLogPredicate(): string {
 
 function startLogStream(): void {
 	if (logStreamProcess) return;
+	if (NOTIFICATION_MATCHERS.length === 0) return;
 
 	try {
 		logStreamProcess = spawn("log", [
