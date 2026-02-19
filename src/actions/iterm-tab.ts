@@ -55,7 +55,7 @@ const prevProcessingState = new Map<number, boolean>();
 // Notification monitoring via macOS unified log
 let logStreamProcess: ChildProcess | null = null;
 let notificationPending = false;
-let notificationProject: string | null = null;
+let notificationEvent: NotificationEvent | null = null;
 let notificationWindowEnd = -1;
 
 // HeyAgent notification event file for project correlation
@@ -86,22 +86,23 @@ const NOTIFICATION_MATCHERS = (process.env.ITERM_TABS_NOTIFICATION_MATCHERS ||
 	.map((s) => s.trim())
 	.filter((s) => s.length > 0);
 
-function readNotificationEvent(): { project: string; timestamp: number } | null {
+type NotificationEvent = {
+	project: string;
+	tty: string | null;
+	timestamp: number;
+};
+
+function readNotificationEvent(): NotificationEvent | null {
 	try {
 		const raw = readFileSync(NOTIFICATION_EVENT_FILE, "utf-8");
 		const data = JSON.parse(raw);
-		if (data.project && data.timestamp && Date.now() - data.timestamp < 5000) {
+		if (data.timestamp && Date.now() - data.timestamp < 5000) {
 			return data;
 		}
 	} catch {
 		// File missing or corrupted
 	}
 	return null;
-}
-
-function matchesProject(tabFullName: string, project: string): boolean {
-	const { displayName } = parseTabName(tabFullName);
-	return displayName.toLowerCase().includes(project.toLowerCase());
 }
 
 function buildLogPredicate(): string {
@@ -142,10 +143,10 @@ function startLogStream(): void {
 					continue;
 				if (!notificationPending) {
 					const event = readNotificationEvent();
-					notificationProject = event?.project ?? null;
+					notificationEvent = event;
 					notificationPending = true;
 					streamDeck.logger.info(
-						`Notification detected${notificationProject ? ` (project: ${notificationProject})` : ""} - triggering immediate poll`
+						`Notification detected${event?.tty ? ` (tty: ${event.tty})` : event?.project ? ` (project: ${event.project})` : ""} - triggering immediate poll`
 					);
 					// Don't wait for the next 3s cycle
 					pollTabs();
@@ -614,37 +615,31 @@ function updateAttention(tabInfo: TabInfo): void {
 	// hidden from the user.
 	const visibleTab = frontmost ? activeIndex : -1;
 
-	// If a new notification arrived, try project-based matching first,
+	// If a new notification arrived, try TTY matching first (exact),
 	// then fall back to the timing heuristic.
 	if (notificationPending) {
 		notificationPending = false;
 
-		if (notificationProject) {
-			let matched = false;
-			for (let i = 0; i < tabInfo.names.length; i++) {
-				const tabIdx = i + 1;
-				if (tabIdx === visibleTab) continue;
-				if (matchesProject(tabInfo.names[i], notificationProject)) {
+		if (notificationEvent?.tty) {
+			const ttyMatch = tabInfo.ttys.indexOf(notificationEvent.tty);
+			if (ttyMatch !== -1) {
+				const tabIdx = ttyMatch + 1;
+				if (tabIdx !== visibleTab) {
 					attentionTabs.add(tabIdx);
-					matched = true;
-					streamDeck.logger.info(
-						`Tab ${tabIdx} flagged: project match "${notificationProject}"`
-					);
 				}
-			}
-			if (matched) {
 				streamDeck.logger.info(
-					`Project match found for "${notificationProject}" - skipping timing heuristic`
+					`Tab ${tabIdx} flagged: TTY match ${notificationEvent.tty}`
 				);
 			} else {
 				streamDeck.logger.info(
-					`No tab matched project "${notificationProject}" - falling back to timing heuristic`
+					`No tab matched TTY "${notificationEvent.tty}" - falling back to timing heuristic`
 				);
 				applyTimingHeuristic(tabInfo, visibleTab);
 			}
-			notificationProject = null;
+			notificationEvent = null;
 		} else {
 			applyTimingHeuristic(tabInfo, visibleTab);
+			notificationEvent = null;
 		}
 	}
 
