@@ -109,10 +109,10 @@ The notification detector uses macOS `log stream` and filters on these markers b
 - `heyagent`
 - `HeyAgent`
 
-You can override or extend this list via `ITERM_TABS_NOTIFICATION_MATCHERS`:
+You can override this list via `ITERM_TABS_NOTIFICATION_MATCHERS`. This replaces the defaults entirely, so include any default matchers you want to keep:
 
 ```bash
-export ITERM_TABS_NOTIFICATION_MATCHERS="com.googlecode.iterm2,heyagent"
+export ITERM_TABS_NOTIFICATION_MATCHERS="com.googlecode.iterm2,heyagent,HeyAgent,YourAppBundleID"
 ```
 
 ### HeyAgent + Codex (and Claude)
