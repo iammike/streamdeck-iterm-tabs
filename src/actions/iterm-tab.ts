@@ -52,6 +52,10 @@ const prevPromptState = new Map<number, boolean>();
 const lastProcessingPoll = new Map<number, number>();
 const prevProcessingState = new Map<number, boolean>();
 
+// Title-based state tracking (Claude Code sets OSC title with spinner/done chars)
+const prevTitleHadSpinner = new Map<number, boolean>();
+const prevTitleHadDone = new Map<number, boolean>();
+
 // Notification monitoring via macOS unified log
 let logStreamProcess: ChildProcess | null = null;
 let notificationPending = false;
@@ -570,6 +574,29 @@ end tell`,
 	}
 }
 
+// -- Title state analysis --
+//
+// Claude Code sets the terminal title via OSC escape sequences:
+//   - Braille spinner chars (U+2800-28FF) while actively working
+//   - Done markers (✳✻✽✶✢) when a task completes and it's waiting for input
+//
+// iTerm2 reflects these in `name of s` for auto-named tabs. Manually-named
+// tabs override this, so these functions return false for those tabs, and
+// we fall back to the isProcessing-based approach.
+
+function hasBrailleSpinner(name: string): boolean {
+	for (const ch of name) {
+		const cp = ch.codePointAt(0) ?? 0;
+		if (cp >= 0x2800 && cp <= 0x28ff) return true;
+	}
+	return false;
+}
+
+function hasDoneMarker(name: string): boolean {
+	// ✳ ✻ ✽ ✶ ✢  — the asterisk variants Claude Code uses as done indicators
+	return /[✳✻✽✶✢]/.test(name);
+}
+
 // -- Attention tracking --
 //
 // Two detection strategies:
@@ -608,7 +635,7 @@ function applyTimingHeuristic(tabInfo: TabInfo, visibleTab: number): void {
 }
 
 function updateAttention(tabInfo: TabInfo): void {
-	const { activeIndex, prompts, processing, frontmost } = tabInfo;
+	const { names, activeIndex, prompts, processing, frontmost } = tabInfo;
 
 	// Only treat the active tab as "visible" if iTerm2 is the
 	// frontmost app. When it's backgrounded, every tab is equally
@@ -624,21 +651,33 @@ function updateAttention(tabInfo: TabInfo): void {
 			const ttyMatch = tabInfo.ttys.indexOf(notificationEvent.tty);
 			if (ttyMatch !== -1) {
 				const tabIdx = ttyMatch + 1;
-				if (tabIdx !== visibleTab) {
+				const isProc = tabInfo.processing[ttyMatch] ?? false;
+				const wasProcessing = prevProcessingState.get(tabIdx) ?? false;
+				const hasTitleSignal = (prevTitleHadSpinner.get(tabIdx) ?? false) || (prevTitleHadDone.get(tabIdx) ?? false);
+				if (hasTitleSignal) {
+					streamDeck.logger.info(
+						`Tab ${tabIdx} skipped: TTY match but title detection is active`
+					);
+				} else if (tabIdx !== visibleTab && (isProc || wasProcessing)) {
 					attentionTabs.add(tabIdx);
+					streamDeck.logger.info(
+						`Tab ${tabIdx} flagged: TTY match ${notificationEvent.tty} (processing=${isProc}, wasProcessing=${wasProcessing})`
+					);
+				} else if (!isProc && !wasProcessing) {
+					streamDeck.logger.info(
+						`Tab ${tabIdx} skipped: TTY match but tab was idle (quick response)`
+					);
 				}
-				streamDeck.logger.info(
-					`Tab ${tabIdx} flagged: TTY match ${notificationEvent.tty}`
-				);
 			} else {
 				streamDeck.logger.info(
-					`No tab matched TTY "${notificationEvent.tty}" - falling back to timing heuristic`
+					`No tab matched TTY "${notificationEvent.tty}" - ignoring`
 				);
-				applyTimingHeuristic(tabInfo, visibleTab);
 			}
 			notificationEvent = null;
 		} else {
-			applyTimingHeuristic(tabInfo, visibleTab);
+			streamDeck.logger.info(
+				`No TTY in notification event - skipping (likely duplicate log entry)`
+			);
 			notificationEvent = null;
 		}
 	}
@@ -647,10 +686,17 @@ function updateAttention(tabInfo: TabInfo): void {
 
 	for (let i = 0; i < tabInfo.names.length; i++) {
 		const tabIdx = i + 1;
+		const rawName = names[i];
 		const atPrompt = prompts[i] ?? false;
 		const wasAtPrompt = prevPromptState.get(tabIdx) ?? false;
 		const isProcessing = processing[i] ?? false;
 		const wasProcessing = prevProcessingState.get(tabIdx) ?? false;
+		const titleHasSpinner = hasBrailleSpinner(rawName);
+		const titleHasDone = hasDoneMarker(rawName);
+		const prevHadSpinner = prevTitleHadSpinner.get(tabIdx) ?? false;
+		const prevHadDone = prevTitleHadDone.get(tabIdx) ?? false;
+		// Title signals are present if we've ever seen spinner/done on this tab
+		const titleDetectionActive = titleHasSpinner || titleHasDone || prevHadSpinner || prevHadDone;
 
 		// Log all state transitions for debugging
 		if (pollCount > 0) {
@@ -664,28 +710,57 @@ function updateAttention(tabInfo: TabInfo): void {
 					`Tab ${tabIdx} processing transition: ${wasProcessing} -> ${isProcessing}`
 				);
 			}
+			if (titleHasSpinner !== prevHadSpinner || titleHasDone !== prevHadDone) {
+				streamDeck.logger.info(
+					`Tab ${tabIdx} title transition: spinner=${prevHadSpinner}->${titleHasSpinner} done=${prevHadDone}->${titleHasDone}`
+				);
+			}
 		}
 
 		if (tabIdx === visibleTab) {
 			// Tab is active AND iTerm2 is frontmost: user can see it
 			attentionTabs.delete(tabIdx);
+		} else if (titleHasSpinner && !prevHadSpinner && attentionTabs.has(tabIdx)) {
+			// New spinner appeared: Claude started working again (user responded)
+			attentionTabs.delete(tabIdx);
+			streamDeck.logger.info(
+				`Tab ${tabIdx} attention cleared: spinner appeared (Claude responding)`
+			);
+		} else if (isProcessing && !wasProcessing && attentionTabs.has(tabIdx)) {
+			// Fallback clear for non-title tabs: started processing
+			attentionTabs.delete(tabIdx);
+			streamDeck.logger.info(
+				`Tab ${tabIdx} attention cleared: new processing started`
+			);
 		} else if (pollCount > 0) {
-			// Strategy 1: shell prompt transition during notification window
-			if (inNotificationWindow && atPrompt && !wasAtPrompt) {
+			// Strategy 1: title-based (Claude Code auto-named tabs)
+			// Spinner disappeared = Claude finished its turn
+			if (titleDetectionActive && prevHadSpinner && !titleHasSpinner) {
+				attentionTabs.add(tabIdx);
+				streamDeck.logger.info(
+					`Tab ${tabIdx} flagged: spinner stopped (done=${titleHasDone})`
+				);
+			}
+
+			// Strategy 2: shell prompt transition during notification window
+			if (!titleDetectionActive && inNotificationWindow && atPrompt && !wasAtPrompt) {
 				attentionTabs.add(tabIdx);
 				streamDeck.logger.info(
 					`Tab ${tabIdx} flagged: prompt transition during notification window`
 				);
 			}
 
-			// Strategy 2: tab stopped processing during notification window
-			if (inNotificationWindow && wasProcessing && !isProcessing) {
+			// Strategy 3: tab stopped processing during notification window
+			if (!titleDetectionActive && inNotificationWindow && wasProcessing && !isProcessing) {
 				attentionTabs.add(tabIdx);
 				streamDeck.logger.info(
 					`Tab ${tabIdx} flagged: stopped processing during notification window`
 				);
 			}
 		}
+
+		prevTitleHadSpinner.set(tabIdx, titleHasSpinner);
+		prevTitleHadDone.set(tabIdx, titleHasDone);
 
 		if (isProcessing) {
 			lastProcessingPoll.set(tabIdx, pollCount);
