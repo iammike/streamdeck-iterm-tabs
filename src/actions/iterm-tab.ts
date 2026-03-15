@@ -593,14 +593,12 @@ function hasDoneMarker(name: string): boolean {
 
 // -- Attention tracking --
 //
-// Two detection strategies:
+// Current detection strategy:
 //
-// 1. Shell prompt transition: background tab goes to "at shell prompt"
-//    (command finished in a regular shell session).
-//
-// 2. macOS notification: when iTerm2 posts a system notification (e.g.
-//    "Claude needs your permission"), we detect it via `log stream` on
-//    the unified log and flag recently-active background tabs.
+// macOS notification: when iTerm2 posts a system notification (e.g.
+// "Claude needs your permission"), we detect it via `log stream` on
+// the unified log and flag recently-active background tabs. Tabs with
+// active title-based progress indicators are handled separately via polling.
 
 
 function updateAttention(tabInfo: TabInfo): void {
