@@ -10,7 +10,7 @@ jobs:
     if: github.event.pull_request.draft == false
     steps:
       - name: Request Copilot code review
-        run: gh pr edit "$PR_NUMBER" --add-reviewer copilot
+        run: gh pr edit "$PR_NUMBER" --add-reviewer copilot --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
