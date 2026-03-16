@@ -622,16 +622,7 @@ function updateAttention(tabInfo: TabInfo): void {
 				const tabIdx = ttyMatch + 1;
 				const isProc = tabInfo.processing[ttyMatch] ?? false;
 				const wasProcessing = prevProcessingState.get(tabIdx) ?? false;
-				const currentName = tabInfo.names[ttyMatch] ?? "";
-				const hasTitleSignal =
-					hasBrailleSpinner(currentName) || hasDoneMarker(currentName) ||
-					(prevTitleHadSpinner.get(tabIdx) ?? false) ||
-					(prevTitleHadDone.get(tabIdx) ?? false);
-				if (hasTitleSignal) {
-					streamDeck.logger.info(
-						`Tab ${tabIdx} skipped: TTY match but title detection is active`
-					);
-				} else if (tabIdx !== visibleTab && (isProc || wasProcessing)) {
+				if (tabIdx !== visibleTab && (isProc || wasProcessing)) {
 					attentionTabs.add(tabIdx);
 					streamDeck.logger.info(
 						`Tab ${tabIdx} flagged: TTY match ${notificationEvent.tty} (processing=${isProc}, wasProcessing=${wasProcessing})`
