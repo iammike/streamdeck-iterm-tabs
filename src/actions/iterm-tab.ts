@@ -620,16 +620,7 @@ function updateAttention(tabInfo: TabInfo): void {
 				const tabIdx = ttyMatch + 1;
 				const isProc = tabInfo.processing[ttyMatch] ?? false;
 				const wasProcessing = prevProcessingState.get(tabIdx) ?? false;
-				const currentName = tabInfo.names[ttyMatch] ?? "";
-				const hasTitleSignal =
-					hasBrailleSpinner(currentName) || hasDoneMarker(currentName) ||
-					(prevTitleHadSpinner.get(tabIdx) ?? false) ||
-					(prevTitleHadDone.get(tabIdx) ?? false);
-				if (hasTitleSignal) {
-					streamDeck.logger.info(
-						`Tab ${tabIdx} skipped: TTY match but title detection is active`
-					);
-				} else if (tabIdx !== visibleTab && (isProc || wasProcessing)) {
+				if (tabIdx !== visibleTab && (isProc || wasProcessing)) {
 					attentionTabs.add(tabIdx);
 					streamDeck.logger.info(
 						`Tab ${tabIdx} flagged: TTY match ${notificationEvent.tty} (processing=${isProc}, wasProcessing=${wasProcessing})`
@@ -695,19 +686,26 @@ function updateAttention(tabInfo: TabInfo): void {
 			streamDeck.logger.info(
 				`Tab ${tabIdx} attention cleared: spinner appeared (Claude responding)`
 			);
-		} else if (isProcessing && !wasProcessing && attentionTabs.has(tabIdx)) {
-			// Fallback clear for non-title tabs: started processing
+		} else if (isProcessing && !wasProcessing && attentionTabs.has(tabIdx) && !titleDetectionActive) {
+			// Fallback clear for non-title tabs only: started processing
 			attentionTabs.delete(tabIdx);
 			streamDeck.logger.info(
 				`Tab ${tabIdx} attention cleared: new processing started`
 			);
 		} else if (pollCount > 0) {
-			// Title-based (Claude Code auto-named tabs): spinner disappeared = finished
-			if (titleDetectionActive && prevHadSpinner && !titleHasSpinner) {
-				attentionTabs.add(tabIdx);
-				streamDeck.logger.info(
-					`Tab ${tabIdx} flagged: spinner stopped (done=${titleHasDone})`
-				);
+			// Title-based detection: flag when spinner disappears or done marker first appears
+			if (titleDetectionActive) {
+				if (prevHadSpinner && !titleHasSpinner) {
+					attentionTabs.add(tabIdx);
+					streamDeck.logger.info(
+						`Tab ${tabIdx} flagged: spinner stopped (done=${titleHasDone})`
+					);
+				} else if (!prevHadDone && titleHasDone) {
+					attentionTabs.add(tabIdx);
+					streamDeck.logger.info(
+						`Tab ${tabIdx} flagged: done marker appeared`
+					);
+				}
 			}
 		}
 
