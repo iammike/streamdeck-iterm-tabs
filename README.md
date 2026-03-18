@@ -65,13 +65,17 @@ The results are combined to determine what program each tab is running (by match
 
 ### Attention detection
 
-The plugin monitors the macOS unified log via `log stream` for notification deliveries from iTerm2. When a notification fires:
+Two strategies run in parallel, depending on the tab.
 
-1. A detection window opens (4 polls / ~12 seconds).
-2. Any background tab that transitions from "processing" to idle, or from "not at shell prompt" to "at shell prompt" during this window gets flagged.
-3. The active tab is only excluded if iTerm2 is the frontmost app. When iTerm2 is backgrounded, all tabs are eligible.
+**Title-based detection (Claude Code tabs)**
 
-This approach avoids false positives from silence-based heuristics while still catching real "needs input" events.
+Claude Code sets the terminal title via OSC escape sequences - a braille spinner character while working, and a done marker (✳ ✻ ✽ ✶ ✢) when it finishes and is waiting for input. The plugin reads these from the iTerm2 session name on every poll. When the spinner disappears or a done marker first appears, the tab is flagged. When a new spinner appears (you responded and Claude started working), the flag clears.
+
+This works with both auto-named and manually renamed tabs. If you use Claude Code's `/rename` command to give a session a custom name, the spinner and done marker characters are still present in the title alongside your name, so detection continues to work.
+
+**Notification-based detection (all other tabs)**
+
+The plugin monitors the macOS unified log via `log stream` for notification deliveries from iTerm2 and HeyAgent. When a notification fires and can be matched to a tab by TTY, that tab is flagged if it was recently active. The active tab is only excluded if iTerm2 is the frontmost app.
 
 ### Button rendering
 
@@ -117,9 +121,9 @@ export ITERM_TABS_NOTIFICATION_MATCHERS="com.googlecode.iterm2,heyagent,HeyAgent
 
 ### HeyAgent + Codex (and Claude)
 
-If you use HeyAgent to wrap Codex or Claude Code, the default matchers already include `heyagent`, so notifications will trigger the same attention highlight as iTerm2’s built‑in notifications. This is most useful for Codex, which doesn’t emit BEL notifications by default.
+If you use HeyAgent to wrap Codex or Claude Code, the default matchers already include `heyagent`, so notifications will trigger the same attention highlight as iTerm2's built-in notifications. This is most useful for Codex, which doesn't emit BEL notifications by default.
 
-For Codex, HeyAgent is effectively required if you want reliable attention highlights. If you run `codex` directly, iTerm2 usually won’t post a macOS notification, so this plugin won’t get the signal to highlight the tab unless you add custom iTerm2 Triggers.
+For Codex, HeyAgent is effectively required if you want reliable attention highlights. If you run `codex` directly, iTerm2 usually won't post a macOS notification, so this plugin won't get the signal to highlight the tab unless you add custom iTerm2 Triggers.
 
 Recommended setup for Codex:
 1. Install HeyAgent globally (`npm install -g heyagent`).
@@ -134,7 +138,7 @@ If you want HeyAgent notifications to be silent and invisible while still trigge
 - **iTerm2 only** - no support for Terminal.app, Alacritty, Kitty, etc.
 - **Single window** - only monitors `window 1` of iTerm2. Multiple windows are not supported.
 - **Polling latency** - button updates take ~1 second (AppleScript overhead) plus up to 3 seconds between polls. Notifications trigger an immediate poll, but `log stream` buffering adds 1-3 seconds of delay.
-- **Notification-dependent attention** - attention highlighting only triggers when iTerm2 posts a macOS notification (typically via BEL character from CLI tools like Claude Code). Conversational prompts that don't send BEL won't trigger highlights. Adding iTerm2 Triggers for specific prompt patterns could help here.
+- **Notification-dependent attention (non-Claude tabs)** - for tabs not running Claude Code, attention highlighting requires a macOS notification from iTerm2 or HeyAgent. Conversational prompts that don't send BEL won't trigger highlights. Adding iTerm2 Triggers for specific prompt patterns could help here.
 - **Notification sounds** - iTerm2 notification sounds are controlled at the macOS level (System Settings > Notifications > iTerm2), not by this plugin. You can disable sounds while keeping notifications enabled, and the plugin will still detect them via the system log.
 
 ## Future work
