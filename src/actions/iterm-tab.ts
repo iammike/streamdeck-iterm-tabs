@@ -688,19 +688,26 @@ function updateAttention(tabInfo: TabInfo): void {
 			streamDeck.logger.info(
 				`Tab ${tabIdx} attention cleared: spinner appeared (Claude responding)`
 			);
-		} else if (isProcessing && !wasProcessing && attentionTabs.has(tabIdx)) {
-			// Fallback clear for non-title tabs: started processing
+		} else if (isProcessing && !wasProcessing && attentionTabs.has(tabIdx) && !titleDetectionActive) {
+			// Fallback clear for non-title tabs only: started processing
 			attentionTabs.delete(tabIdx);
 			streamDeck.logger.info(
 				`Tab ${tabIdx} attention cleared: new processing started`
 			);
 		} else if (pollCount > 0) {
-			// Title-based (Claude Code auto-named tabs): spinner disappeared = finished
-			if (titleDetectionActive && prevHadSpinner && !titleHasSpinner) {
-				attentionTabs.add(tabIdx);
-				streamDeck.logger.info(
-					`Tab ${tabIdx} flagged: spinner stopped (done=${titleHasDone})`
-				);
+			// Title-based detection: flag when spinner disappears or done marker first appears
+			if (titleDetectionActive) {
+				if (prevHadSpinner && !titleHasSpinner) {
+					attentionTabs.add(tabIdx);
+					streamDeck.logger.info(
+						`Tab ${tabIdx} flagged: spinner stopped (done=${titleHasDone})`
+					);
+				} else if (!prevHadDone && titleHasDone) {
+					attentionTabs.add(tabIdx);
+					streamDeck.logger.info(
+						`Tab ${tabIdx} flagged: done marker appeared`
+					);
+				}
 			}
 		}
 
